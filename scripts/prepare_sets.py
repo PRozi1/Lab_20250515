@@ -125,7 +125,7 @@ def create_dataset(img_list, img_resize_shape, img_type):
 def main():
     data_split_type = 'standard_split'
     img_type = 'greyscale'  # 'greyscale' / 'color'
-    img_resize_shape = (32,32)
+    img_resize_shape = (64,64)
 
     if img_resize_shape:
         folder_to_save = f"./data/datasets/{data_split_type}/{img_type}/{img_resize_shape[0]}x{img_resize_shape[1]}"

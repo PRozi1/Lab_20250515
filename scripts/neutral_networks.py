@@ -3,8 +3,9 @@ import numpy as np
 import tensorflow as tf
 
 from datetime import datetime
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import StratifiedKFold, KFold
 from sklearn import metrics 
+
 
 Dense = tf.keras.layers.Dense
 Flatten = tf.keras.layers.Flatten
@@ -69,8 +70,11 @@ def reshape_data(dataset):
 
 
 def train_evaluate(X_train, y_train, X_test, y_test, model, epochs, batch_size, callbacks):
-    y_train = np_utils.to_categorical(y_train)
-    y_test  = np_utils.to_categorical(y_test)
+    # y_train = np_utils.to_categorical(y_train)
+    # y_test  = np_utils.to_categorical(y_test)
+    n_classes = model.output_shape[-1]
+    y_train = np_utils.to_categorical(y_train, num_classes=n_classes)
+    y_test  = np_utils.to_categorical(y_test,  num_classes=n_classes)
     model.fit(X_train, y_train,
               validation_data=(X_test, y_test),
               epochs=epochs, batch_size=batch_size,
@@ -79,20 +83,49 @@ def train_evaluate(X_train, y_train, X_test, y_test, model, epochs, batch_size, 
     return round(acc * 100, 2)
 
 
+# def cross_validation(n_splits, X, y, model, epochs, batch_size, callbacks):
+#     kf = StratifiedKFold(n_splits=n_splits)
+#     y_labels = np.argmax(y, axis=1)
+
 def cross_validation(n_splits, X, y, model, epochs, batch_size, callbacks):
     kf = StratifiedKFold(n_splits=n_splits)
-    y_labels = np.argmax(y, axis=1)
+    # jeśli y ma więcej wymiarów, to to-hot → zamień na etykiety, w przeciwnym razie już etykiety
+    # if y.ndim > 1:
+    #     y_labels = np.argmax(y, axis=1)
+    # else:
+    #     y_labels = y
+    if y.ndim > 1:
+        y_labels = np.argmax(y, axis=1)
+    else:
+        y_labels = y
+    # jeśli nie da się stratify (np. min_count < n_splits), użyj zwykłego KFold
+    from collections import Counter
+    min_count = min(Counter(y_labels).values())
+    if min_count < n_splits:
+        print(f"Uwaga: klasa z najmniejszą liczbą próbek ma tylko {min_count} < {n_splits}, przełączam na KFold")
+        splitter = KFold(n_splits=n_splits, shuffle=True, random_state=42)
+        splits = splitter.split(X)
+    else:
+        splitter = StratifiedKFold(n_splits=n_splits)
+        splits = splitter.split(X, y_labels)
     test_scores = []
 
-    # save initial weights
-    model.save_weights('reference_model.h5')
+    # save initial weights (plik musi kończyć się na .weights.h5)
+    #model.save_weights('reference_model.weights.h5')
+    # save initial weights (plik musi kończyć się na .weights.h5)
+    model.save_weights('reference_model.weights.h5')
+    
     print(f"{n_splits}-Fold Cross Validation\n")
 
-    for idx, (train_idx, test_idx) in enumerate(kf.split(X, y_labels), start=1):
-        model.load_weights('reference_model.h5')
-        score = train_evaluate(X[train_idx], y_labels[train_idx],
-                               X[test_idx],  y_labels[test_idx],
-                               model, epochs, batch_size, callbacks)
+    #for idx, (train_idx, test_idx) in enumerate(kf.split(X, y_labels), start=1):
+    for idx, (train_idx, test_idx) in enumerate(splits, start=1):
+        # reload initial weights before each fold
+        model.load_weights('reference_model.weights.h5')
+        score = train_evaluate(
+            X[train_idx], y_labels[train_idx],
+            X[test_idx],  y_labels[test_idx],
+            model, epochs, batch_size, callbacks
+        )
         test_scores.append(score)
         print(f"Fold {idx}: test acc = {score}%")
 
@@ -101,16 +134,40 @@ def cross_validation(n_splits, X, y, model, epochs, batch_size, callbacks):
     print(f"\nFinal results: mean={mean}%, std={std}%")
     return test_scores
 
+# def cross_validation(n_splits, X, y, model, epochs, batch_size, callbacks):
+#     kf = StratifiedKFold(n_splits=n_splits)
+#     y_labels = np.argmax(y, axis=1)
+#     test_scores = []
+
+#     # save initial weights
+#     model.save_weights('reference_model.h5')
+#     print(f"{n_splits}-Fold Cross Validation\n")
+
+#     for idx, (train_idx, test_idx) in enumerate(kf.split(X, y_labels), start=1):
+#         model.load_weights('reference_model.h5')
+#         score = train_evaluate(X[train_idx], y_labels[train_idx],
+#                                X[test_idx],  y_labels[test_idx],
+#                                model, epochs, batch_size, callbacks)
+#         test_scores.append(score)
+#         print(f"Fold {idx}: test acc = {score}%")
+
+#     mean = round(np.mean(test_scores), 2)
+#     std  = round(np.std(test_scores), 2)
+#     print(f"\nFinal results: mean={mean}%, std={std}%")
+#     return test_scores
+
 
 def create_model_mlp(n_classes, input_shape,
-                     optimizer='adam', func_activation='relu',
+                     optimizer='rmsprop', func_activation='relu',
                      kernel_initializer='random_uniform'):
     model = Sequential([
-        Dense(256, input_shape=input_shape,
+        Dense(128, input_shape=input_shape,
               activation=func_activation,
-              kernel_initializer=kernel_initializer),
-        Dense(256, activation=func_activation,
-              kernel_initializer=kernel_initializer),
+               kernel_initializer=kernel_initializer),
+        #  Dense(128, activation=func_activation,
+        #        kernel_initializer=kernel_initializer),
+        #  Dense(256, activation=func_activation,
+        #        kernel_initializer=kernel_initializer),
         Dense(n_classes, activation='softmax',
               kernel_initializer='random_uniform'),
     ])
@@ -149,7 +206,7 @@ def main():
     data_split_type      = 'standard_split'  # or 'cv'
     neural_network       = 'mlp'             # or 'cnn'
     img_type             = 'color'       # or 'color'
-    img_resize_shape     = (32,32)              # or (X, Y)
+    img_resize_shape     = (128,128)              # or (X, Y)
     reshape_data_method  = 'data_flattening' # or 'data_reshape'
 
     # -- BUILD the path --
@@ -229,9 +286,9 @@ def main():
             print(f"{name} acc: {acc*100:.2f}%")
     else:
         cross_validation(
-            n_splits=5, X=X, y=y,
+            n_splits=30, X=X, y=y,
             model=model,
-            epochs=2000, batch_size=16,
+            epochs=2000, batch_size=32,
             callbacks=callbacks
         )
 
